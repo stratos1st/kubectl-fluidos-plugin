@@ -162,19 +162,19 @@ def fluidos_kubectl_extension(
 ) -> int:
     ...
     # Inside fluidos_kubectl_extension function, within the try block:
-        if input_format == InputFormat.MSPL:
-            logger.info("Invoking MSPL Service Handler")
-            return on_mlps(data)
-        elif input_format == InputFormat.K8S:
-            if _has_intent_defined(spec):
-                logger.info("Invoking K8S with Intent Service Handler")
-                return on_k8s_w_intent(data)
-        elif input_format == InputFormat.KFP:
-            logger.info("Invoking Kubeflow Pipeline Handler")
-            return on_kfp(data)  # New handler for Kubeflow Pipelines
-         elif input_format == InputFormat.PIPELINE:
-                logger.info("Invoking Pipeline Processor")
-                return on_pipeline(data)
+    if input_format == InputFormat.MSPL:
+        logger.info("Invoking MSPL Service Handler")
+        return on_mlps(data)
+    elif input_format == InputFormat.K8S:
+        if _has_intent_defined(spec):
+            logger.info("Invoking K8S with Intent Service Handler")
+            return on_k8s_w_intent(data)
+    elif input_format == InputFormat.KFP:
+        logger.info("Invoking Kubeflow Pipeline Handler")
+        return on_kfp(data)  # New handler for Kubeflow Pipelines
+     elif input_format == InputFormat.PIPELINE:
+        logger.info("Invoking Pipeline Processor")
+        return on_pipeline(data)
 
     # Fallback to kubectl apply if none of the custom handlers match
     logger.info("Invoking kubectl apply")
