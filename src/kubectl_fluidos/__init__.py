@@ -174,13 +174,14 @@ def fluidos_kubectl_extension(argv: list[str], stdin: TextIO, *, on_apply: Calla
     return on_apply(argv[1:], stdin_data)
 
 
-def main() -> None:
+ def main() -> None:
     raise SystemExit(
         fluidos_kubectl_extension(
             sys.argv,
             sys.stdin,
             on_mlps=lambda x: MSPLProcessor(MSPLProcessorConfiguration.build_configuration(sys.argv))(x),
-            on_k8s_w_intent=lambda x: ModelBasedOrchestratorProcessor(ModelBasedOrchestratorConfiguration.build_configuration(sys.argv))(x)
+            on_k8s_w_intent=lambda x: ModelBasedOrchestratorProcessor(ModelBasedOrchestratorConfiguration.build_configuration(sys.argv))(x),
+            on_kfp=lambda x: KubeflowPipelineProcessor(ModelBasedOrchestratorConfiguration.build_configuration(sys.argv))(x)  # New handler for KFP
         )
     )
 
