@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 class InputFormat(Enum):
     K8S = auto()
     MSPL = auto()
+    KFP = auto() 
 
 
 INTENT_K8S_KEYWORD = "fluidos-intent-"  # label to be confirmed
@@ -77,9 +78,11 @@ def _check_input_format(input_data: str) -> tuple[InputFormat, dict[str, Any]]:
     if _is_XML(input_data):
         return (InputFormat.MSPL, dict())
     elif _is_YAML(input_data):
-        return (InputFormat.K8S, _to_YAML(input_data))
+        yaml_data = _to_YAML(input_data)
+        if _is_kubeflow_pipeline(yaml_data):  # New check for Kubeflow pipeline
+            return (InputFormat.KFP, yaml_data)
+        return (InputFormat.K8S, yaml_data)
     raise ValueError("Unknown format")
-
 
 def _has_intent_defined(spec: dict[str, Any]) -> bool:
     annotations: dict[str, str] = spec.get("metadata", dict()).get("annotations", dict())
@@ -125,6 +128,10 @@ def _is_deployment(spec: dict[str, Any]) -> bool:
         return spec.get("kind", None) == "Deployment"
     return False
 
+def _is_kubeflow_pipeline(spec: dict[str, Any]) -> bool:
+    """Detects if the YAML spec is a Kubeflow Pipeline resource."""
+    return spec.get("apiVersion", "").startswith("kubeflow.org") and spec.get("kind") in {"Pipeline", "PipelineRun"}
+
 
 def _behavior_not_defined() -> int:
     raise NotImplementedError()
@@ -134,45 +141,71 @@ def _default_apply(args: list[str], stdin: str | None) -> int:
     return os.system("kubectl apply " + " ".join(args))
 
 
-def fluidos_kubectl_extension(argv: list[str], stdin: TextIO, *, on_apply: Callable[[list[str], str | None], int] = _default_apply, on_mlps: Callable[..., int] = _behavior_not_defined, on_k8s_w_intent: Callable[..., int] = _behavior_not_defined) -> int:
-    logger.info("Starting FLUIDOS kubectl extension")
 
-    try:
-        file_data, stdin_data = _extract_input_data(argv, stdin)  # this needs to be fixed, we cannot assume kubectl apply is receiving data from stdin if it has been consumed here
-    except ValueError:
-        print("error: must specify one of -f and -k", file=sys.stderr)
-        return 1
 
-    data: str | None = None
+def fluidos_kubectl_extension(
+    argv: list[str], 
+    stdin: TextIO, 
+    *, 
+    on_apply: Callable[[list[str], str | None], int] = _default_apply, 
+    on_mlps: Callable[..., int] = _behavior_not_defined, 
+    on_k8s_w_intent: Callable[..., int] = _behavior_not_defined, 
+    on_kfp: Callable[..., int] = _behavior_not_defined  # New handler for KFP
+) -> int:
+    ...
+    # Inside fluidos_kubectl_extension function, within the try block:
+        if input_format == InputFormat.MSPL:
+            logger.info("Invoking MSPL Service Handler")
+            return on_mlps(data)
+        elif input_format == InputFormat.K8S:
+            if _has_intent_defined(spec):
+                logger.info("Invoking K8S with Intent Service Handler")
+                return on_k8s_w_intent(data)
+        elif input_format == InputFormat.KFP:
+            logger.info("Invoking Kubeflow Pipeline Handler")
+            return on_kfp(data)  # New handler for Kubeflow Pipelines
 
-    if stdin_data:
-        data = stdin_data
-    if file_data and 0 < len(file_data) < 2:
-        data = file_data[0]
-
-    if data:
-        # we assume to handle only one file/spec, for the moment at least
-        try:
-            input_format, spec = _check_input_format(data)
-
-            if input_format == InputFormat.MSPL:
-                # INVOKE MSPL orchestrator
-                logger.info("Invoking MSPL Service Handler")
-                return on_mlps(data)
-            elif input_format == InputFormat.K8S:
-                if _has_intent_defined(spec):
-                    logger.info("Invoking K8S with Intent Service Handler")
-                    return on_k8s_w_intent(data)
-
-        except ValueError:
-            logger.info("Unknown format, fallback to apply")
-    else:
-        logger.info("Skipping because multiple specification available")
-
-    # if nothing else applies, fallback to vanilla kubectl apply behavior
+    # Fallback to kubectl apply if none of the custom handlers match
     logger.info("Invoking kubectl apply")
     return on_apply(argv[1:], stdin_data)
 
+class KubeflowPipelineProcessor:
+    """Processor class to handle Kubeflow Pipeline resources."""
+    def __init__(self, configuration: ModelBasedOrchestratorConfiguration):
+        self._configuration = configuration
+        self._k8s_client = client.ApiClient(self._configuration.configuration)
+
+    def __call__(self, data: str | bytes) -> int:
+        logger.info("Processing Kubeflow Pipeline request")
+        try:
+            request = _request_to_dictionary(data)
+        except TypeError as e:
+            logger.error("Error processing request, possibly malformed")
+            logger.debug(f"Error message {e=}")
+            return -1
+
+        # Determine the type of Kubeflow resource to create
+        kind = request.get("kind")
+        if kind not in {"Pipeline", "PipelineRun"}:
+            logger.error("Unsupported Kubeflow Pipeline resource type")
+            return -1
+
+        try:
+            response = client.CustomObjectsApi(self._k8s_client).create_namespaced_custom_object(
+                group="kubeflow.org",
+                version="v1beta1",
+                namespace=self._configuration.namespace,
+                plural=kind.lower() + "s",  # Make 'Pipeline' -> 'pipelines', 'PipelineRun' -> 'pipelineruns'
+                body=request,
+                async_req=False
+            )
+            logger.info("Kubeflow Pipeline resource created successfully")
+        except ApiException as e:
+            logger.error(f"Unable to create a Kubeflow Pipeline resource: {e}")
+            return -1
+
+        logger.debug(f"Response: {response=}")
+        return 0
 
  def main() -> None:
     raise SystemExit(
