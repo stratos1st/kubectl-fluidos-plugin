@@ -103,6 +103,45 @@ class ModelBasedOrchestratorProcessor:
         return 0
 
 
+class KubeflowPipelineProcessor:
+    """Processor class to handle Kubeflow Pipeline resources."""
+    def __init__(self, configuration: ModelBasedOrchestratorConfiguration):
+        self._configuration = configuration
+        self._k8s_client = client.ApiClient(self._configuration.configuration)
+
+    def __call__(self, data: str | bytes) -> int:
+        logger.info("Processing Kubeflow Pipeline request")
+        try:
+            request = _request_to_dictionary(data)
+        except TypeError as e:
+            logger.error("Error processing request, possibly malformed")
+            logger.debug(f"Error message {e=}")
+            return -1
+
+        # Determine the type of Kubeflow resource to create
+        kind = request.get("kind")
+        if kind not in {"Pipeline", "PipelineRun"}:
+            logger.error("Unsupported Kubeflow Pipeline resource type")
+            return -1
+
+        try:
+            response = client.CustomObjectsApi(self._k8s_client).create_namespaced_custom_object(
+                group="kubeflow.org",
+                version="v1beta1",
+                namespace=self._configuration.namespace,
+                plural=kind.lower() + "s",  # Make 'Pipeline' -> 'pipelines', 'PipelineRun' -> 'pipelineruns'
+                body=request,
+                async_req=False
+            )
+            logger.info("Kubeflow Pipeline resource created successfully")
+        except ApiException as e:
+            logger.error(f"Unable to create a Kubeflow Pipeline resource: {e}")
+            return -1
+
+        logger.debug(f"Response: {response=}")
+        return 0
+
+
 def _request_to_dictionary(data: str | bytes) -> dict[str, Any]:
     logger.info("Converting to dictionary and augmenting")
     request_as_yaml: dict[str, Any] = _extract_request(data)
