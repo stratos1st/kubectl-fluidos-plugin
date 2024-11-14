@@ -253,7 +253,8 @@ class KubeflowPipelineProcessor2:
             sys.stdin,
             on_mlps=lambda x: MSPLProcessor(MSPLProcessorConfiguration.build_configuration(sys.argv))(x),
             on_k8s_w_intent=lambda x: ModelBasedOrchestratorProcessor(ModelBasedOrchestratorConfiguration.build_configuration(sys.argv))(x),
-            on_pipeline=lambda x: KubeflowPipelineProcessor(_to_pipeline(x)).process_pipeline()  # New pipeline processor
+            on_kfp=lambda x: KubeflowPipelineProcessor(ModelBasedOrchestratorConfiguration.build_configuration(sys.argv))(x)  # New handler for KFP
+            on_pipeline=lambda x: KubeflowPipelineProcessor2(_to_pipeline(x)).process_pipeline()  # New pipeline processor
         )
     )
 
