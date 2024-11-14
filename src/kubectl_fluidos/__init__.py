@@ -46,7 +46,8 @@ logger = logging.getLogger(__name__)
 class InputFormat(Enum):
     K8S = auto()
     MSPL = auto()
-    KFP = auto() 
+    KFP = auto()
+    PIPELINE = auto()
 
 
 INTENT_K8S_KEYWORD = "fluidos-intent-"  # label to be confirmed
@@ -74,13 +75,16 @@ def _to_YAML(data: str) -> dict[str, Any]:
     return yaml.load(data, Loader=Loader)
 
 
+def _to_pipeline(data: str) -> dict[str, Any]:
+    return yaml.safe_load(data)  # Load the pipeline YAML structure
+
 def _check_input_format(input_data: str) -> tuple[InputFormat, dict[str, Any]]:
     if _is_XML(input_data):
         return (InputFormat.MSPL, dict())
     elif _is_YAML(input_data):
         yaml_data = _to_YAML(input_data)
-        if _is_kubeflow_pipeline(yaml_data):  # New check for Kubeflow pipeline
-            return (InputFormat.KFP, yaml_data)
+        if _is_pipeline(input_data):
+            return (InputFormat.PIPELINE, yaml_data)
         return (InputFormat.K8S, yaml_data)
     raise ValueError("Unknown format")
 
@@ -132,6 +136,13 @@ def _is_kubeflow_pipeline(spec: dict[str, Any]) -> bool:
     """Detects if the YAML spec is a Kubeflow Pipeline resource."""
     return spec.get("apiVersion", "").startswith("kubeflow.org") and spec.get("kind") in {"Pipeline", "PipelineRun"}
 
+def _is_pipeline(data: str) -> bool:
+    try:
+        parsed_data = yaml.safe_load(data)
+        return "pipelineInfo" in parsed_data and "components" in parsed_data
+    except Exception as e:
+        logger.info(str(e))
+    return False
 
 def _behavior_not_defined() -> int:
     raise NotImplementedError()
@@ -139,9 +150,6 @@ def _behavior_not_defined() -> int:
 
 def _default_apply(args: list[str], stdin: str | None) -> int:
     return os.system("kubectl apply " + " ".join(args))
-
-
-
 
 def fluidos_kubectl_extension(
     argv: list[str], 
@@ -164,6 +172,9 @@ def fluidos_kubectl_extension(
         elif input_format == InputFormat.KFP:
             logger.info("Invoking Kubeflow Pipeline Handler")
             return on_kfp(data)  # New handler for Kubeflow Pipelines
+         elif input_format == InputFormat.PIPELINE:
+                logger.info("Invoking Pipeline Processor")
+                return on_pipeline(data)
 
     # Fallback to kubectl apply if none of the custom handlers match
     logger.info("Invoking kubectl apply")
@@ -207,6 +218,34 @@ class KubeflowPipelineProcessor:
         logger.debug(f"Response: {response=}")
         return 0
 
+class KubeflowPipelineProcessor2:
+    def __init__(self, pipeline_data: dict[str, Any]):
+        self.pipeline_data = pipeline_data
+
+    def process_pipeline(self) -> int:
+        logger.info("Processing Kubeflow pipeline")
+        
+        # Extract components and execute each based on dependencies
+        try:
+            components = self.pipeline_data.get("components", {})
+            tasks = self.pipeline_data.get("root", {}).get("dag", {}).get("tasks", {})
+
+            for task_name, task_details in tasks.items():
+                component_ref = task_details.get("componentRef", {}).get("name", "")
+                if component_ref in components:
+                    self._run_component(components[component_ref], task_name)
+            
+            logger.info("Pipeline processed successfully")
+            return 0
+        except Exception as e:
+            logger.error(f"Error processing pipeline: {e}")
+            return -1
+
+    def _run_component(self, component: dict[str, Any], task_name: str):
+        # Simulate or orchestrate the component execution
+        logger.info(f"Executing task {task_name} with component {component}")
+
+
  def main() -> None:
     raise SystemExit(
         fluidos_kubectl_extension(
@@ -214,9 +253,10 @@ class KubeflowPipelineProcessor:
             sys.stdin,
             on_mlps=lambda x: MSPLProcessor(MSPLProcessorConfiguration.build_configuration(sys.argv))(x),
             on_k8s_w_intent=lambda x: ModelBasedOrchestratorProcessor(ModelBasedOrchestratorConfiguration.build_configuration(sys.argv))(x),
-            on_kfp=lambda x: KubeflowPipelineProcessor(ModelBasedOrchestratorConfiguration.build_configuration(sys.argv))(x)  # New handler for KFP
+            on_pipeline=lambda x: KubeflowPipelineProcessor(_to_pipeline(x)).process_pipeline()  # New pipeline processor
         )
     )
+
 
 
 if __name__ == "__main__":
